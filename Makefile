@@ -324,8 +324,9 @@ test_java:
 
 ##################################################################
 
-VPATH=test sample src
-
+VPATH=test sample src uchina1/bls
+CFLAGS+=-std=c++11
+LDFLAGS+=-pthread
 .SUFFIXES: .cpp .d .exe .c .o
 
 $(OBJ_DIR)/%.o: %.cpp
