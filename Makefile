@@ -324,7 +324,7 @@ test_java:
 
 ##################################################################
 
-VPATH=test sample src
+VPATH=test sample src $(wildcard FT-AS/*)
 
 .SUFFIXES: .cpp .d .exe .c .o
 
