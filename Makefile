@@ -325,7 +325,8 @@ test_java:
 ##################################################################
 
 VPATH=test sample src $(wildcard FT-AS/*)
-
+CFLAGS+=-std=c++11
+LDFLAGS+=-pthread
 .SUFFIXES: .cpp .d .exe .c .o
 
 $(OBJ_DIR)/%.o: %.cpp
