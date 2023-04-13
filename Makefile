@@ -324,7 +324,7 @@ test_java:
 
 ##################################################################
 
-VPATH=test sample src uchina1/bls
+VPATH=test sample src $(wildcard FT-AS/*)
 CFLAGS+=-std=c++11
 LDFLAGS+=-pthread
 .SUFFIXES: .cpp .d .exe .c .o
