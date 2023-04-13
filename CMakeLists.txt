@@ -18,6 +18,14 @@ option(
 	"build static library"
 	OFF
 )
+option(
+	MCL_STANDALONE
+	"build without standard library"
+	OFF
+)
+
+set(MCL_CFLAGS_STANDALONE -fno-threadsafe-statics -fno-exceptions -fno-rtti -DCYBOZU_DONT_USE_STRING -DCYBOZU_DONT_USE_EXCEPTION CACHE STRING "add user defined CFLAGS")
+
 if(MSVC)
 	set(MCL_TEST_WITH_GMP_DEFAULT OFF)
 else()
@@ -114,27 +122,29 @@ if(MSVC)
 	target_compile_definitions(mcl_st PUBLIC NOMINMAX)
 	# set compiler flags for warnings level
 	set(MCL_COMPILE_OPTIONS /W4)
-	target_compile_options(mcl PRIVATE ${MCL_COMPILE_OPTIONS})
-	target_compile_options(mcl_st PRIVATE ${MCL_COMPILE_OPTIONS})
 else()
 	# Set compiler flags for warnings
 	set(MCL_COMPILE_OPTIONS -Wall -Wextra -Wformat=2 -Wcast-qual -Wcast-align
 		-Wwrite-strings -Wfloat-equal -Wpointer-arith -DNDEBUG -O3 -fPIC)
-
-	target_compile_options(mcl PRIVATE ${MCL_COMPILE_OPTIONS})
-	target_compile_options(mcl_st PRIVATE ${MCL_COMPILE_OPTIONS})
-	set_target_properties(mcl PROPERTIES
-		CXX_STANDARD 11
-		CXX_STANDARD_REQUIRED YES
-		CXX_EXTENSIONS NO)
-	set_target_properties(mcl_st PROPERTIES
-		CXX_STANDARD 11
-		CXX_STANDARD_REQUIRED YES
-		CXX_EXTENSIONS NO)
-	target_compile_features(mcl PUBLIC cxx_std_11)
-	target_compile_features(mcl_st PUBLIC cxx_std_11)
-
 endif()
+
+if (${MCL_STANDALONE})
+	set(MCL_COMPILE_OPTIONS ${MCL_COMPILE_OPTIONS} ${MCL_CFLAGS_STANDALONE})
+endif()
+target_compile_options(mcl PRIVATE ${MCL_COMPILE_OPTIONS})
+target_compile_options(mcl_st PRIVATE ${MCL_COMPILE_OPTIONS})
+
+#	set_target_properties(mcl PROPERTIES
+#		CXX_STANDARD 11
+#		CXX_STANDARD_REQUIRED YES
+#		CXX_EXTENSIONS NO)
+#	set_target_properties(mcl_st PROPERTIES
+#		CXX_STANDARD 11
+#		CXX_STANDARD_REQUIRED YES
+#		CXX_EXTENSIONS NO)
+#	target_compile_features(mcl PUBLIC cxx_std_11)
+#	target_compile_features(mcl_st PUBLIC cxx_std_11)
+
 
 # use bint-x64 on x64, bint${BIT}.ll on the other CPU
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64") # Win64
@@ -150,8 +160,8 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64") # Win64
 	target_link_libraries(mcl_st PUBLIC ${BINT_X64_OBJ})
 	add_dependencies(mcl_st gen_bint-x64-win.obj)
 elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" AND NOT APPLE)
-	target_sources(mcl PRIVATE src/asm/bint-x64-amd64.s)
-	target_sources(mcl_st PRIVATE src/asm/bint-x64-amd64.s)
+	target_sources(mcl PRIVATE src/asm/bint-x64-amd64.S)
+	target_sources(mcl_st PRIVATE src/asm/bint-x64-amd64.S)
 else()
 	if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 		message(FATAL_ERROR "requiring clang++. cmake -DCMAKE_CXX_COMPILER=clang++ ..")
@@ -180,8 +190,8 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64") # Win64
 elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" AND NOT APPLE)
 	target_compile_definitions(mcl PUBLIC MCL_USE_LLVM=1)
 	target_compile_definitions(mcl_st PUBLIC MCL_USE_LLVM=1)
-	target_sources(mcl PRIVATE src/asm/x86-64.s)
-	target_sources(mcl_st PRIVATE src/asm/x86-64.s)
+	target_sources(mcl PRIVATE src/asm/x86-64.S)
+	target_sources(mcl_st PRIVATE src/asm/x86-64.S)
 elseif(${MCL_USE_LLVM})
 	set(BASE_OBJ "${CMAKE_CURRENT_BINARY_DIR}/base${BIT}.o")
 	message("base_obj=" ${BASE_OBJ})
@@ -292,8 +302,7 @@ export(PACKAGE mcl)
 
 
 # Tests
-if((CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME OR MCL_BUILD_TESTING)
-	AND BUILD_TESTING)
+if(MCL_BUILD_TESTING)
 	enable_testing()
 	add_subdirectory(test)
 endif()

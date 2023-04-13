@@ -10,7 +10,9 @@
 #include <mcl/config.hpp>
 #include <cybozu/bit_operation.hpp>
 #include <assert.h>
+#ifndef MCL_STANDALONE
 #include <stdio.h>
+#endif
 
 //#define MCL_BINT_ASM 1
 #ifdef MCL_WASM32
@@ -45,12 +47,28 @@ typedef void (*void_pppp)(Unit*, const Unit*, const Unit*, const Unit*);
 typedef void (*void_ppp)(Unit*, const Unit*, const Unit*);
 typedef void (*void_pp)(Unit*, const Unit*);
 
+#if !defined(MCL_DONT_CALL_INITBINT) && MCL_BINT_ASM_X64 == 1
 MCL_DLL_API void initBint(); // disable mulx/adox/adcx if they are not available on x64. Do nothing in other environments.
+
+namespace impl {
+static struct Init {
+	Init()
+	{
+		initBint();
+	}
+} g_init;
+}
+#endif
 
 // show integer as little endian
 template<class T>
 inline void dump(const T *x, size_t n, const char *msg = "")
 {
+#ifdef MCL_STANDALONE
+	(void)x;
+	(void)n;
+	(void)msg;
+#else
 	if (msg) printf("%s ", msg);
 	for (size_t i = 0; i < n; i++) {
 		T v = x[n - 1 - i];
@@ -59,6 +77,7 @@ inline void dump(const T *x, size_t n, const char *msg = "")
 		}
 	}
 	printf("\n");
+#endif
 }
 
 /*
@@ -440,17 +459,9 @@ MCL_DLL_API void sqr_SECP256K1(Unit *y, const Unit *x, const Unit *p);
 // x &= (1 << bitSize) - 1
 MCL_DLL_API void maskN(Unit *x, size_t n, size_t bitSize);
 
-/*
-	get pp[N] such that p[N] * pp[N] = -1 mod M
-	M = 1 << (sizeof(Unit) * N)
-	0 < pp[N] < M
-*/
-MCL_DLL_API void getMontgomeryCoeff(Unit *pp, const Unit *p, size_t N);
-
 // ppLow = Unit(p)
 inline Unit getMontgomeryCoeff(Unit pLow)
 {
-#if 1
 	Unit pp = 0;
 	Unit t = 0;
 	Unit x = 1;
@@ -463,11 +474,6 @@ inline Unit getMontgomeryCoeff(Unit pLow)
 		x <<= 1;
 	}
 	return pp;
-#else
-	Unit pp;
-	getMontgomeryCoeff(&pp, &pLow, 1);
-	return pp;
-#endif
 }
 
 } } // mcl::bint

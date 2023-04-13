@@ -79,6 +79,7 @@ CP=cp -f
 MKDIR=mkdir -p
 RM=rm -rf
 
+DEBUG?=0
 ifeq ($(DEBUG),1)
   ifeq ($(GCC_EXT),1)
     CFLAGS+=-fsanitize=address
@@ -90,16 +91,16 @@ ifeq ($(DEBUG),2)
     CFLAGS+=-fsanitize=memory -fsanitize-memory-track-origins=2
     LDFLAGS+=-fsanitize=memory -fsanitize-memory-track-origins=2
   endif
-else
+endif
+ifeq ($(DEBUG),3)
+  # no option
+endif
+ifeq ($(DEBUG),0)
   CFLAGS_OPT+=-fomit-frame-pointer -DNDEBUG -fno-stack-protector
   ifeq ($(CXX),clang++)
     CFLAGS_OPT+=-O3
   else
-    ifeq ($(shell expr $(GCC_VER) \> 4.6.0),1)
-      CFLAGS_OPT+=-O3
-    else
-      CFLAGS_OPT+=-O3
-    endif
+    CFLAGS_OPT+=-O3
   endif
   ifeq ($(MARCH),)
     ifeq ($(INTEL),1)
@@ -127,6 +128,8 @@ ifeq ($(MCL_USE_GMP),1)
   GMP_LIB=-lgmp -lgmpxx
   ifeq ($(UNAME_S),Darwin)
     GMP_DIR?=/opt/homebrew/
+  endif
+  ifneq ($(GMP_DIR),)
     CFLAGS+=-I$(GMP_DIR)/include
     LDFLAGS+=-L$(GMP_DIR)/lib
   endif

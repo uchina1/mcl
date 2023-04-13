@@ -2,6 +2,7 @@ include common.mk
 LIB_DIR?=lib
 OBJ_DIR?=obj
 EXE_DIR?=bin
+MCL_SIZEOF_UNIT?=$(shell expr $(BIT) / 8)
 CLANG?=clang++$(LLVM_VER)
 SRC_SRC=fp.cpp bn_c256.cpp bn_c384.cpp bn_c384_256.cpp bn_c512.cpp she_c256.cpp
 TEST_SRC=fp_test.cpp ec_test.cpp fp_util_test.cpp window_method_test.cpp elgamal_test.cpp fp_tower_test.cpp gmp_test.cpp bn_test.cpp bn384_test.cpp glv_test.cpp paillier_test.cpp she_test.cpp vint_test.cpp bn512_test.cpp conversion_test.cpp
@@ -14,7 +15,7 @@ TEST_SRC+=modp_test.cpp
 TEST_SRC+=ecdsa_test.cpp ecdsa_c_test.cpp
 TEST_SRC+=mul_test.cpp
 TEST_SRC+=bint_test.cpp
-TEST_SRC+=low_func_test.cpp
+TEST_SRC+=low_func_test.cpp static_init_test.cpp
 LIB_OBJ=$(OBJ_DIR)/fp.o
 ifeq ($(MCL_STATIC_CODE),1)
   LIB_OBJ+=obj/static_code.o
@@ -87,7 +88,7 @@ endif
 
 # build base$(BIT).ll
 BASE_LL=src/base$(BIT).ll
-BASE_ASM=src/asm/$(CPU).s
+BASE_ASM=src/asm/$(CPU).S
 BASE_OBJ=$(OBJ_DIR)/base$(BIT).o
 
 ifeq ($(UPDATE_ASM),1)
@@ -103,7 +104,7 @@ endif
 
 ifeq ($(OS)-$(ARCH),Linux-x86_64)
 $(BASE_OBJ): $(BASE_ASM)
-	$(PRE)$(AS) $(ASFLAGS) -c $< -o $@
+	$(PRE)$(CC) $(CFLAGS) -c $< -o $@
 else
 $(BASE_OBJ): $(BASE_LL)
 	$(CLANG) -c $< -o $@ $(CFLAGS) $(CLANG_TARGET) $(CFLAGS_USER)
@@ -122,12 +123,12 @@ asm: $(BASE_LL)
 	$(LLVM_OPT) -O3 -o - $(BASE_LL) | $(LLVM_LLC) -O3 $(LLVM_FLAGS) -x86-asm-syntax=intel
 
 # build bit$(BIT).ll
-BINT_SUF?=-$(OS)-$(CPU)
+BINT_ARCH?=-$(OS)-$(CPU)
 MCL_BINT_ASM?=1
 MCL_BINT_ASM_X64?=1
-ASM_MODE?=s
+ASM_SUF?=S
 ifeq ($(OS),mingw64)
-  ASM_MODE=asm
+  WIN_API=-win
 endif
 src/fp.cpp: src/bint_switch.hpp
 ifeq ($(MCL_BINT_ASM),1)
@@ -139,18 +140,18 @@ src/fp.cpp: include/mcl/bint_proto.hpp
   ifeq ($(CPU)-$(MCL_BINT_ASM_X64),x86-64-1)
     ifeq ($(OS),mingw64)
       BINT_ASM_X64_BASENAME=bint-x64
-$(BINT_OBJ): src/asm/$(BINT_ASM_X64_BASENAME).asm
-	nasm $(NASM_ELF_OPT) -o $@ $<
+$(BINT_OBJ): src/asm/$(BINT_ASM_X64_BASENAME).S
+	$(PRE)$(CXX) $(CFLAGS) -c $< -o $@
 
     else
       BINT_ASM_X64_BASENAME=bint-x64-amd64
-$(BINT_OBJ): src/asm/$(BINT_ASM_X64_BASENAME).s
-	$(PRE)$(AS) $(ASFLAGS) -c $< -o $@
+$(BINT_OBJ): src/asm/$(BINT_ASM_X64_BASENAME).$(ASM_SUF)
+	$(PRE)$(CC) $(CFLAGS) -c $< -o $@
 
     endif
   else
-    BINT_BASENAME=bint$(BIT)$(BINT_SUF)
-    BINT_SRC=src/asm/$(BINT_BASENAME).s
+    BINT_BASENAME=bint$(BIT)$(BINT_ARCH)
+    BINT_SRC=src/asm/$(BINT_BASENAME).$(ASM_SUF)
     CFLAGS+=-DMCL_BINT_ASM_X64=0
 $(BINT_OBJ): $(BINT_LL)
 	$(CLANG) -c $< -o $@ $(CFLAGS) $(CLANG_TARGET) $(CFLAGS_USER)
@@ -176,15 +177,11 @@ src/bint_switch.hpp: src/gen_bint_header.py
 	python3 $< > $@ switch $(GEN_BINT_HEADER_PY_OPT)
 src/llvm_proto.hpp: src/gen_llvm_proto.py
 	python3 $< > $@
-src/asm/$(BINT_ASM_X64_BASENAME).$(ASM_MODE): src/s_xbyak.py src/gen_bint_x64.py
-ifeq ($(ASM_MODE),asm)
-  ifeq ($(OS),mingw64)
-	python3 src/gen_bint_x64.py -win -m nasm > $@
-  else
-	python3 src/gen_bint_x64.py -win > $@
-  endif
+src/asm/$(BINT_ASM_X64_BASENAME).$(ASM_SUF): src/s_xbyak.py src/gen_bint_x64.py
+ifeq ($(ASM_SUF),S)
+	python3 src/gen_bint_x64.py -m gas $(WIN_API) > $@
 else
-	python3 src/gen_bint_x64.py -m gas > $@
+	python3 src/gen_bint_x64.py -win > $@
 endif
 $(BINT_SRC): src/bint$(BIT).ll
 	$(CLANG) -S $< -o $@ -no-integrated-as -fpic -O2 -DNDEBUG -Wall -Wextra $(CLANG_TARGET) $(CFLAGS_USER)
@@ -234,7 +231,7 @@ $(MCL_LIB): $(LIB_OBJ)
 	$(AR) $(ARFLAGS) $@ $(LIB_OBJ)
 
 $(MCL_SLIB): $(LIB_OBJ)
-	$(PRE)$(CXX) -o $@ $(LIB_OBJ) -shared $(LDFLAGS) $(MCL_SLIB_LDFLAGS)
+	$(PRE)$(CXX) -o $@ $(LIB_OBJ) -shared $(CFLAGS) $(MCL_SLIB_LDFLAGS)
 
 $(BN256_LIB): $(BN256_OBJ)
 	$(AR) $(ARFLAGS) $@ $(BN256_OBJ)
@@ -249,16 +246,16 @@ $(SHE384_256_LIB): $(SHE384_256_OBJ)
 	$(AR) $(ARFLAGS) $@ $(SHE384_256_OBJ)
 
 $(SHE256_SLIB): $(SHE256_OBJ) $(MCL_LIB)
-	$(PRE)$(CXX) -o $@ $(SHE256_OBJ) $(MCL_LIB) -shared $(LDFLAGS) $(SHE256_SLIB_LDFLAGS)
+	$(PRE)$(CXX) -o $@ $(SHE256_OBJ) $(MCL_LIB) -shared $(CFLAGS) $(SHE256_SLIB_LDFLAGS)
 
 $(SHE384_SLIB): $(SHE384_OBJ) $(MCL_LIB)
-	$(PRE)$(CXX) -o $@ $(SHE384_OBJ) $(MCL_LIB) -shared $(LDFLAGS) $(SHE384_SLIB_LDFLAGS)
+	$(PRE)$(CXX) -o $@ $(SHE384_OBJ) $(MCL_LIB) -shared $(CFLAGS) $(SHE384_SLIB_LDFLAGS)
 
 $(SHE384_256_SLIB): $(SHE384_256_OBJ) $(MCL_LIB)
-	$(PRE)$(CXX) -o $@ $(SHE384_256_OBJ) $(MCL_LIB) -shared $(LDFLAGS) $(SHE384_256_SLIB_LDFLAGS)
+	$(PRE)$(CXX) -o $@ $(SHE384_256_OBJ) $(MCL_LIB) -shared $(CFLAGS) $(SHE384_256_SLIB_LDFLAGS)
 
 $(BN256_SLIB): $(BN256_OBJ) $(MCL_SLIB)
-	$(PRE)$(CXX) -o $@ $(BN256_OBJ) -shared $(LDFLAGS) $(BN256_SLIB_LDFLAGS)
+	$(PRE)$(CXX) -o $@ $(BN256_OBJ) -shared $(CFLAGS) $(BN256_SLIB_LDFLAGS)
 
 $(BN384_LIB): $(BN384_OBJ)
 	$(AR) $(ARFLAGS) $@ $(BN384_OBJ)
@@ -270,13 +267,13 @@ $(BN512_LIB): $(BN512_OBJ)
 	$(AR) $(ARFLAGS) $@ $(BN512_OBJ)
 
 $(BN384_SLIB): $(BN384_OBJ) $(MCL_SLIB)
-	$(PRE)$(CXX) -o $@ $(BN384_OBJ) -shared $(LDFLAGS) $(BN384_SLIB_LDFLAGS)
+	$(PRE)$(CXX) -o $@ $(BN384_OBJ) -shared $(CFLAGS) $(BN384_SLIB_LDFLAGS)
 
 $(BN384_256_SLIB): $(BN384_256_OBJ) $(MCL_SLIB)
-	$(PRE)$(CXX) -o $@ $(BN384_256_OBJ) -shared $(LDFLAGS) $(BN384_256_SLIB_LDFLAGS)
+	$(PRE)$(CXX) -o $@ $(BN384_256_OBJ) -shared $(CFLAGS) $(BN384_256_SLIB_LDFLAGS)
 
 $(BN512_SLIB): $(BN512_OBJ) $(MCL_SLIB)
-	$(PRE)$(CXX) -o $@ $(BN512_OBJ) -shared $(LDFLAGS) $(BN512_SLIB_LDFLAGS)
+	$(PRE)$(CXX) -o $@ $(BN512_OBJ) -shared $(CFLAGS) $(BN512_SLIB_LDFLAGS)
 
 ECDSA_OBJ=$(OBJ_DIR)/ecdsa_c.o
 $(ECDSA_LIB): $(ECDSA_OBJ)
@@ -300,16 +297,19 @@ bin/static_code_test.exe: test/static_code_test.cpp src/fp.cpp obj/static_code.o
 # set PATH for mingw, set LD_LIBRARY_PATH is for other env
 COMMON_LIB_PATH="../../../lib"
 PATH_VAL=$$PATH:$(COMMON_LIB_PATH) LD_LIBRARY_PATH=$(COMMON_LIB_PATH) DYLD_LIBRARY_PATH=$(COMMON_LIB_PATH) CGO_CFLAGS="-I$(shell pwd)/include" CGO_LDFLAGS="-L../../../lib"
-test_go256: $(MCL_SLIB) $(BN256_SLIB)
-	cd ffi/go/mcl && env PATH=$(PATH_VAL) go test -tags bn256 .
+test_go256: $(MCL_LIB) $(BN256_LIB)
+	$(RM) $(BLS256_SLIB) $(MCL_SLIB)
+	cd ffi/go/mcl && go test -tags bn256 .
 
-test_go384: $(MCL_SLIB) $(BN384_SLIB)
-	cd ffi/go/mcl && env PATH=$(PATH_VAL) go test -tags bn384 .
+test_go384: $(MCL_LIB) $(BN384_LIB)
+	$(RM) $(BLS384_SLIB) $(MCL_SLIB)
+	cd ffi/go/mcl && go test -tags bn384 .
 
-test_go384_256: $(MCL_SLIB) $(BN384_256_SLIB)
-	cd ffi/go/mcl && env PATH=$(PATH_VAL) go test -tags bn384_256 .
+test_go384_256: $(MCL_LIB) $(BN384_256_LIB)
+	$(RM) $(BLS384_256_SLIB) $(MCL_SLIB)
+	cd ffi/go/mcl && go test -tags bn384_256 .
 
-test_go:
+test_go: # Use static libraries, not shared libraries.
 	$(MAKE) test_go256
 	$(MAKE) test_go384
 	$(MAKE) test_go384_256
@@ -335,8 +335,8 @@ $(OBJ_DIR)/%.o: %.cpp
 $(OBJ_DIR)/%.o: %.c
 	$(PRE)$(CC) $(CFLAGS) -c $< -o $@ -MMD -MP -MF $(@:.o=.d)
 
-$(OBJ_DIR)/%.o: src/asm/%.s
-	$(PRE)$(AS) $(ASFLAGS) -c $< -o $@
+$(OBJ_DIR)/%.o: src/asm/%.S
+	$(PRE)$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJ_DIR)/%.o: src/asm/%.asm
 	nasm $(NASM_ELF_OPT) -o $@ $<
@@ -402,9 +402,9 @@ endif
 
 # test
 bin/emu:
-	$(CXX) -g -o $@ src/fp.cpp src/bn_c256.cpp test/bn_c256_test.cpp -DMCL_DONT_USE_XBYAK -DMCL_SIZEOF_UNIT=8 -DMCL_MAX_BIT_SIZE=256 -I./include -DMCL_BINT_ASM=0
+	$(CXX) -g -o $@ src/fp.cpp src/bn_c256.cpp test/bn_c256_test.cpp -DMCL_DONT_USE_XBYAK -DMCL_SIZEOF_UNIT=$(MCL_SIZEOF_UNIT) -DMCL_MAX_BIT_SIZE=256 -I./include -DMCL_BINT_ASM=0
 bin/pairing_c_min.exe: sample/pairing_c.c include/mcl/vint.hpp src/fp.cpp include/mcl/bn.hpp
-	$(CXX) -std=c++03 -O3 -g -fno-threadsafe-statics -fno-exceptions -fno-rtti -o $@ sample/pairing_c.c src/fp.cpp src/bn_c384_256.cpp -I./include -DXBYAK_NO_EXCEPTION -DMCL_SIZEOF_UNIT=8 -DMCL_MAX_BIT_SIZE=384 -DCYBOZU_DONT_USE_STRING -DCYBOZU_DONT_USE_EXCEPTION -DNDEBUG # -DMCL_DONT_USE_CSPRNG
+	$(CXX) -std=c++03 -O3 -g -fno-threadsafe-statics -fno-exceptions -fno-rtti -o $@ sample/pairing_c.c src/fp.cpp src/bn_c384_256.cpp -I./include -DXBYAK_NO_EXCEPTION -DMCL_SIZEOF_UNIT=$(MCL_SIZEOF_UNIT) -DMCL_MAX_BIT_SIZE=384 -DCYBOZU_DONT_USE_STRING -DCYBOZU_DONT_USE_EXCEPTION -DNDEBUG # -DMCL_DONT_USE_CSPRNG
 bin/ecdsa-emu:
 	$(CXX) -g -o $@ src/fp.cpp test/ecdsa_test.cpp -DMCL_SIZEOF_UNIT=4 -D__EMSCRIPTEN__ -DMCL_MAX_BIT_SIZE=256 -I./include
 bin/ecdsa-c-emu:
@@ -423,15 +423,43 @@ make_tbl:
 	$(CXX) -o misc/precompute misc/precompute.cpp $(CFLAGS) $(MCL_LIB) $(LDFLAGS)
 	./misc/precompute > ../bls/src/qcoeff-bn254.hpp
 
+MCL_STANDALONE?=-std=c++03 -O3 -fpic -fno-exceptions -fno-threadsafe-statics -fno-rtti -fno-stack-protector -fpic -I ./include -DNDEBUG -DMCL_STANDALONE -DMCL_SIZEOF_UNIT=$(MCL_SIZEOF_UNIT) -DMCL_MAX_BIT_SIZE=384 -D_FORTIFY_SOURCE=0 -DMCL_USE_LLVM=1 $(CFLAGS_EXTRA)
+fp.o: src/fp.cpp
+	$(CLANG) -c $< $(MCL_STANDALONE) -target $(CLANG_TARGET)
+bn_c384_256.o: src/bn_c384_256.cpp
+	$(CLANG) -c $< $(MCL_STANDALONE) -target $(CLANG_TARGET)
+base$(BIT).o: src/base$(BIT).ll
+	$(CLANG) -c $< $(MCL_STANDALONE) -target $(CLANG_TARGET)
+bint$(BIT).o: src/bint$(BIT).ll
+	$(CLANG) -c $< $(MCL_STANDALONE) -target $(CLANG_TARGET)
+libmcl.a: fp.o base$(BIT).o bint$(BIT).o
+	$(AR) $(ARFLAGS) $@ fp.o base$(BIT).o bint$(BIT).o
+libmclbn384_256.a: bn_c384_256.o
+	$(AR) $(ARFLAGS) $@ $<
+# e.g. make CLANG=clang++-12 CLANG_TARGET=aarch64 standalone
+standalone: libmcl.a libmclbn384_256.a
+clean_standalone:
+	$(RM) libmcl.a libmcl384_256.a *.o
+
 update_xbyak:
 	cp -a ../xbyak/xbyak/xbyak.h ../xbyak/xbyak/xbyak_util.h ../xbyak/xbyak/xbyak_mnemonic.h src/xbyak/
 
 update_cybozulib:
 	cp -a $(addprefix ../cybozulib/,$(wildcard include/cybozu/*.hpp)) include/cybozu/
 
+ANDROID_TARGET=armeabi-v7a arm64-v8a x86_64
+NDK_BUILD?=ndk-build
+android: $(BASE_LL)
+	@$(NDK_BUILD) -C android/jni NDK_DEBUG=0 MCL_LIB_SHARED=$(MCL_LIB_SHARED)
+	@for target in $(ANDROID_TARGET); do \
+		mkdir -p lib/android/$$target; \
+		cp android/obj/local/$$target/libmclbn384_256.a lib/android/$$target/; \
+	done
+
 clean:
-	$(RM) $(LIB_DIR)/*.a $(LIB_DIR)/*.$(LIB_SUF) $(OBJ_DIR)/*.o $(OBJ_DIR)/*.obj $(OBJ_DIR)/*.d $(EXE_DIR)/*.exe $(GEN_EXE) $(BASE_OBJ) $(LIB_OBJ) $(BN256_OBJ) $(BN384_OBJ) $(BN512_OBJ) lib/*.a src/static_code.asm src/dump_code
+	$(RM) $(LIB_DIR)/*.a $(LIB_DIR)/*.$(LIB_SUF) $(OBJ_DIR)/*.o $(OBJ_DIR)/*.obj $(OBJ_DIR)/*.d $(EXE_DIR)/*.exe $(GEN_EXE) $(BASE_OBJ) $(LIB_OBJ) $(BN256_OBJ) $(BN384_OBJ) $(BN512_OBJ) lib/*.a src/static_code.asm src/dump_code lib/android
 	$(RM) src/gen_bint.exe
+	$(MAKE) clean_standalone
 
 clean_gen:
 	$(RM) include/mcl/bint_proto.hpp src/asm/bint* src/bint_switch.hpp
@@ -454,7 +482,7 @@ install: lib/libmcl.a lib/libmcl.$(LIB_SUF)
 	$(MKDIR) $(PREFIX)/lib
 	cp -a lib/libmcl.a lib/libmcl.$(LIB_SUF) $(PREFIX)/lib/
 
-.PHONY: test she-wasm bin/emu
+.PHONY: test she-wasm bin/emu android
 
 # don't remove these files automatically
 .SECONDARY: $(addprefix $(OBJ_DIR)/, $(ALL_SRC:.cpp=.o))

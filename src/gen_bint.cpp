@@ -53,6 +53,13 @@ struct Code : public mcl::Generator {
 		if (offset > 0) {
 			p = getelementptr(p, offset);
 		}
+#if 1
+		const size_t n = r.bit / unit;
+		if (n > 1) {
+			p = bitcast(p, Operand(IntPtr, unit * n));
+		}
+		store(r, p);
+#else
 		if (r.bit == unit) {
 			store(r, p);
 			return;
@@ -66,6 +73,7 @@ struct Code : public mcl::Generator {
 				r = lshr(r, unit);
 			}
 		}
+#endif
 	}
 	Operand loadN(Operand p, size_t n, int offset = 0)
 	{
@@ -487,41 +495,6 @@ struct Code : public mcl::Generator {
 		ret(z);
 		endFunc();
 	}
-	/*
-		z = the N-unit bottom of px[0..N] * y
-	*/
-	void gen_mulUnit2_inner()
-	{
-		resetGlobalIdx();
-		Operand z(Int, bit);
-		Operand px(IntPtr, unit);
-		Operand y(Int, unit);
-		std::string name = "mulUnit2_inner" + cybozu::itoa(bit);
-		mulUnit2_innerM[bit] = Function(name, z, px, y);
-		mulUnit2_innerM[bit].setPrivate();
-		verifyAndSetPrivate(mulUnit2_innerM[bit]);
-		beginFunc(mulUnit2_innerM[bit]);
-		if (N == 1) {
-			Operand x = load(px);
-			z = mul(x, y);
-		} else {
-			OperandVec L(N), H(N-1);
-			for (uint32_t i = 0; i < N; i++) {
-				Operand xy = call(mulPos, px, y, makeImm(unit, i));
-				L[i] = trunc(xy, unit);
-				if (i < N - 1) {
-					H[i] = call(extractHigh, xy);
-				}
-			}
-			Operand LL = pack(&L[0], N);
-			Operand HH = pack(&H[0], N - 1);
-			HH = zext(HH, bit);
-			HH = shl(HH, unit);
-			z = add(LL, HH);
-		}
-		ret(z);
-		endFunc();
-	}
 	void gen_mcl_fp_mulUnitPre()
 	{
 		resetGlobalIdx();
@@ -618,37 +591,80 @@ struct Code : public mcl::Generator {
 			ret(Void);
 		}
 	}
-	// pz[N] = the bottom half of px[N] * py[N]
-	void gen_mulLow_inner(const Operand& pz, const Operand& px, const Operand& py)
+	void gen_sqr_inner(const Operand& py, const Operand& px)
 	{
 		if (N == 1) {
 			Operand x = load(px);
-			Operand y = load(py);
-			Operand z = mul(x, y);
-			storeN(z, pz);
+			x = zext(x, unit * 2);
+			Operand y = mul(x, x);
+			storeN(y, py);
 			ret(Void);
-			return;
-		}
-		Operand y = load(py);
-		Operand xy = call(mulUnit2_innerM[bit], px, y);
-		store(trunc(xy, unit), pz);
-		Operand t = lshr(xy, unit);
-		t = trunc(t, bit - unit);
-		for (uint32_t i = 1; i < N; i++) {
-			y = loadN(py, 1, i);
-			xy = call(mulUnit2_innerM[bit - unit * i], px, y);
-			t = add(t, xy);
-			if (t.bit == unit) {
-				storeN(t, pz, i);
-			} else {
-				storeN(trunc(t, unit), pz, i);
+		// slower for N = 8
+		} else if (N > 8 && (N % 2) == 0) {
+			/*
+				W = 1 << half
+				(aW + b)^2 = a^2W^2 + 2abW + b^2
+				@note Karatsuba is slower for N = 8
+			*/
+			const int H = N / 2;
+			const int half = bit / 2;
+			Operand pxW = getelementptr(px, H);
+			Operand pyWW = getelementptr(py, N);
+			Operand abBuf = alloca_(unit, N);
+			call(mclb_mulM[H], abBuf, px, pxW);
+			call(mclb_sqrM[H], py, px); // b^2
+			call(mclb_sqrM[H], pyWW, pxW); // a^2
+
+			Operand ab = loadN(abBuf, N);
+			ab = zext(ab, ab.bit + unit);
+			ab = add(ab, ab);
+			ab = zext(ab, bit + half);
+			Operand pyH = getelementptr(py, H);
+			Operand t = loadN(pyH, N + H);
+			t = add(t, ab);
+			storeN(t, pyH);
+			ret(Void);
+		} else {
+			Operand t1, t2, tt;
+			t1 = load(px);
+			tt = call(mulUU, t1, t1);
+			store(trunc(tt, unit), py);
+			tt = lshr(tt, unit);
+			t2 = load(getelementptr(px, N - 1));
+			Operand sum = call(mulUU, t1, t2);
+			for (uint32_t i = 2; i < N; i++) {
+				t1 = load(px);
+				t2 = load(getelementptr(px, N - i));
+				Operand line = call(mulUU, t1, t2);
+				for (uint32_t j = 1; j < i; j++) {
+					t1 = load(getelementptr(px, j));
+					t2 = load(getelementptr(px, N - i + j));
+					t1 = call(mulUU, t1, t2);
+					line = zext(line, line.bit + unit * 2);
+					t1 = zext(t1, line.bit);
+					t1 = shl(t1, unit * 2 * j);
+					line = _or(line, t1);
+				}
+				// line = ...[N-1+i 1][N-i 0]
+				if (sum.bit < line.bit) sum = zext(sum, line.bit);
+				sum = shl(sum, unit);
+				sum = add(sum, line);
 			}
-			if (i < N - 1) {
-				t = lshr(t, unit);
-				t = trunc(t, bit - unit * (i+1));
+			uint32_t bit2 = unit * (N * 2 - 1);
+			tt = zext(tt, bit2);
+			for (uint32_t i = 1; i < N; i++) {
+				t1 = load(getelementptr(px, i));
+				t1 = call(mulUU, t1, t1);
+				t1 = zext(t1, bit2);
+				t1 = shl(t1, unit * (i * 2 - 1));
+				tt = _or(tt, t1);
 			}
+			sum = zext(sum, bit2);
+			sum = add(sum, sum);
+			tt = add(tt, sum);
+			storeN(tt, py, 1);
+			ret(Void);
 		}
-		ret(Void);
 	}
 	void gen_mclb_mul()
 	{
@@ -672,20 +688,13 @@ struct Code : public mcl::Generator {
 		mclb_sqrM[N] = Function(name, Void, py, px);
 		verifyAndSetPrivate(mclb_sqrM[N]);
 		beginFunc(mclb_sqrM[N]);
-		gen_mul_inner(py, px, px);
-		endFunc();
-	}
-	void gen_mclb_mulLow()
-	{
-		resetGlobalIdx();
-		Operand pz(IntPtr, unit);
-		Operand px(IntPtr, unit);
-		Operand py(IntPtr, unit);
-		std::string name = "mclb_mulLow" + cybozu::itoa(N);
-		mclb_mulLowM[N] = Function(name, Void, pz, px, py);
-		verifyAndSetPrivate(mclb_mulLowM[N]);
-		beginFunc(mclb_mulLowM[N]);
-		gen_mulLow_inner(pz, px, py);
+		// on M1, mul is faster than sqr for N <= 6
+		// on A64FX, mul is faster than sqr for N <= 4
+		if (N <= 6) {
+			gen_mul_inner(py, px, px);
+		} else {
+			gen_sqr_inner(py, px);
+		}
 		endFunc();
 	}
 	void gen_mcl_fp_mont(bool isFullBit = true)
@@ -813,8 +822,6 @@ struct Code : public mcl::Generator {
 			gen_mclb_mulUnitAdd();
 			gen_mclb_mul();
 			gen_mclb_sqr();
-			gen_mulUnit2_inner();
-//			gen_mclb_mulLow();
 		}
 	}
 };
@@ -838,8 +845,8 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	if (N == 0) {
-		N = unit == 8 ? 9 : 17;
-		addN = unit == 8 ? 16 : 32;
+		N = unit == 64 ? 9 : 17;
+		addN = unit == 64 ? 16 : 32;
 	}
 	Code c;
 	c.setLlvmVer(llvmVer);

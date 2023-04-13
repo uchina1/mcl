@@ -7,8 +7,10 @@
 	http://opensource.org/licenses/BSD-3-Clause
 */
 #include <mcl/gmp_util.hpp>
-#include <memory.h>
 #include <mcl/array.hpp>
+#ifndef MCL_STANDALONE
+#include <stdio.h>
+#endif
 
 #if defined(__EMSCRIPTEN__) || defined(__wasm__)
 	#define MCL_DONT_USE_XBYAK
@@ -25,7 +27,7 @@
 
 namespace mcl {
 
-static const int version = 0x174; /* 0xABC = A.BC */
+static const int version = 0x182; /* 0xABC = A.BC */
 
 /*
 	specifies available string format mode for X::setIoMode()
@@ -378,11 +380,16 @@ inline const char* getIoSeparator(int ioMode)
 
 inline void dump(const void *buf, size_t n)
 {
+#ifdef MCL_STANDALONE
+	(void)buf;
+	(void)n;
+#else
 	const uint8_t *s = (const uint8_t *)buf;
 	for (size_t i = 0; i < n; i++) {
 		printf("%02x ", s[i]);
 	}
 	printf("\n");
+#endif
 }
 
 #ifndef CYBOZU_DONT_USE_STRING
