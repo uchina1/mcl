@@ -1,8 +1,5 @@
-#include <mcl/bn256.hpp>
-
 //includes
 #include <map>
-#include <time.h>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
